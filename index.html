@@ -245,7 +245,6 @@ button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(-
       <div class="prompt" id="prompt"></div>
       <div class="stage" id="stage"></div>
       <div class="hint" id="hint">Tap any line or space to hear its note</div>
-      <div class="tuner" id="tuner" hidden><span class="rec" aria-hidden="true"></span><span class="tn-n" id="tnN">–</span><span class="tn-track"><i id="tnI"></i></span><span class="tn-c" id="tnC">listening…</span></div>
       <div class="fb" id="fb" aria-live="polite"></div>
       <div id="answers"></div>
       <div class="opts" id="opts"></div>
@@ -270,7 +269,7 @@ function wpick(ws){let t=ws.reduce((a,b)=>a+b,0),r=Math.random()*t;for(let i=0;i
 /* ---------- storage ---------- */
 const store={get(k,f){try{const v=localStorage.getItem(k);return v?JSON.parse(v):f}catch(e){return f}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 const DEF={tapmode:'flow',sprint:60,singlev:1,singlab:'letters',ivmode:'tap',ivSet:[2,3,4,5,6,7,8],swhint:false,clef:'treble',ledger:true,dir:'mix',view:'melodic',ans:'shape',system:'carnatic',sound:true,tonic:'C',symSet:'both',dotted:false,level:1,tempo:72,count:'num'};
-let S=Object.assign({},DEF,store.get('ss.settings',{}));
+let S=Object.assign({},DEF,store.get('ss.settings',{}));S.ivmode='tap';
 let ST=Object.assign({days:{},iv:{}},store.get('ss.stats',{}));
 const saveS=()=>store.set('ss.settings',S), saveST=()=>store.set('ss.stats',ST);
 const dkey=d=>d.toLocaleDateString('en-CA');
@@ -304,7 +303,8 @@ function exactFull(s,down){const f=EXFULL[S.system];if(!down)return s===12?'tara
 /* ---------- audio ---------- */
 let AC=null,master=null,drone=null;
 let verb=null;
-function ac(){if(!AC){AC=new(window.AudioContext||window.webkitAudioContext)();const comp=AC.createDynamicsCompressor();comp.threshold.value=-14;comp.ratio.value=3;comp.connect(AC.destination);master=AC.createGain();master.gain.value=.9;master.connect(comp)}if(AC.state==='suspended')AC.resume();return AC}
+const aSess=t=>{try{if(navigator.audioSession)navigator.audioSession.type=t}catch(e){}};
+function ac(){if(!AC){aSess('playback');AC=new(window.AudioContext||window.webkitAudioContext)();const comp=AC.createDynamicsCompressor();comp.threshold.value=-14;comp.ratio.value=3;comp.connect(AC.destination);master=AC.createGain();master.gain.value=.9;master.connect(comp)}if(AC.state==='suspended')AC.resume();return AC}
 function room(){if(verb)return verb;const a=ac(),len=Math.floor(a.sampleRate*2.8),buf=a.createBuffer(2,len,a.sampleRate);
   for(let c=0;c<2;c++){const d=buf.getChannelData(c);for(let i=0;i<len;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/len,3.4)*(i<a.sampleRate*.012?i/(a.sampleRate*.012):1)}
   const conv=a.createConvolver();conv.buffer=buf;const wet=a.createGain();wet.gain.value=.38;const tone=a.createBiquadFilter();tone.type='lowpass';tone.frequency.value=4200;conv.connect(tone).connect(wet).connect(master);
@@ -328,10 +328,12 @@ function heardNow(evT){const a=ac();if(a.getOutputTimestamp){const ts=a.getOutpu
 const N12=['C','C♯','D','E♭','E','F','F♯','G','A♭','A','B♭','B'];
 const fold=(m,target)=>{let d=(m-target)%12;if(d>6)d-=12;if(d<-6)d+=12;return d*100};
 const Mic={stream:null,an:null,buf:null,timer:null,cb:null,seg:null,
-  async start(){if(this.stream)return;const a=ac();if(!navigator.mediaDevices?.getUserMedia)throw new Error('nomic');
+  async start(){if(this.stream)return;const a=ac();aSess('play-and-record');if(!navigator.mediaDevices?.getUserMedia)throw new Error('nomic');
     this.stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
     const src=a.createMediaStreamSource(this.stream);this.an=a.createAnalyser();this.an.fftSize=2048;src.connect(this.an);const z=a.createGain();z.gain.value=0;this.an.connect(z).connect(a.destination);this.buf=new Float32Array(2048)},
-  stop(){this.halt();if(this.stream)this.stream.getTracks().forEach(t=>t.stop());this.stream=null;this.an=null},
+  stop(){this.tok=null;this.halt();if(this.stream)this.stream.getTracks().forEach(t=>t.stop());this.stream=null;this.an=null;aSess('playback')},
+  listenAfter(midi,cb,delay=1400){this.stop();const tok=this.tok={};if(midi!=null)pluck(hz(midi),ac().currentTime+.03,2.2,.22);tuner(true,null);$('#tnC').textContent='listen…';
+    setTimeout(()=>{if(this.tok!==tok)return;this.start().then(()=>{if(this.tok===tok)this.listen(cb)}).catch(()=>{tuner(false);micFail()})},delay)},
   listen(cb){this.cb=cb;this.seg=null;if(!this.timer)this.timer=setInterval(()=>this.tick(),45)},
   halt(){clearInterval(this.timer);this.timer=null;this.cb=null;this.seg=null;tuner(false)},
   read(){const b=this.buf,sr=ac().sampleRate;this.an.getFloatTimeDomainData(b);const n=b.length;let r=0;for(let i=0;i<n;i++)r+=b[i]*b[i];r=Math.sqrt(r/n);if(r<.01)return null;
@@ -438,10 +440,8 @@ const Notes={
 /* ---------- drill: intervals ---------- */
 const ivSetSeg=()=>`<div class="seg wide"><span class="seg-l">Practise</span><div class="seg-b ivset">`+[1,2,3,4,5,6,7,8].map(n=>`<button type="button" data-m="ivSet" data-v="${n}" class="${S.ivSet.includes(n)?'on':''}" aria-pressed="${S.ivSet.includes(n)}">${ORD2[n-1]}</button>`).join('')+`</div></div>`;
 const Intervals={
-  opts:()=>seg('Answer by','ivmode',[['tap','Tapping'],['sing','Singing']])+ivSetSeg()+clefSeg()+seg('Show','view',[['melodic','One after another'],['harmonic','Stacked']])+seg('Direction','dir',[['up','Up'],['down','Down'],['mix','Both']])+(S.ivmode==='tap'?seg('Answer with','ans',[['shape','Number'],['exact','Number + quality']]):'')+seg('Swaram hint','swhint',[[false,'Off'],[true,'On']])+(S.swhint?seg('Swarams','system',[['carnatic','Carnatic'],['hindustani','Hindustani']]):'')+seg('Ledger lines','ledger',[[true,'On'],[false,'Off']])+(S.ivmode==='tap'?soundSeg():''),
-  mount(){this.q=null;if(S.ivmode==='sing'){$('#answers').innerHTML='';$('#stage').innerHTML='';$('#prompt').textContent='Allow the microphone to sing your answers.';fb('');
-      Mic.start().then(()=>{if(curName==='intervals'&&S.ivmode==='sing')this.next()}).catch(()=>{micFail();$('#answers').innerHTML=`<div class="row"><button class="btn" type="button" id="micRetry">Try the mic again</button></div>`;$('#micRetry').onclick=()=>this.mount()});return}
-    Mic.stop();this.next()},
+  opts:()=>ivSetSeg()+clefSeg()+seg('Show','view',[['melodic','One after another'],['harmonic','Stacked']])+seg('Direction','dir',[['up','Up'],['down','Down'],['mix','Both']])+(S.ivmode==='tap'?seg('Answer with','ans',[['shape','Number'],['exact','Number + quality']]):'')+seg('Swaram hint','swhint',[[false,'Off'],[true,'On']])+(S.swhint?seg('Swarams','system',[['carnatic','Carnatic'],['hindustani','Hindustani']]):'')+seg('Ledger lines','ledger',[[true,'On'],[false,'Off']])+(S.ivmode==='tap'?soundSeg():''),
+  mount(){this.q=null;Mic.stop();this.next()},
   pickN(){const harm=S.view==='harmonic'||S.ivmode==='sing'&&false,ws=[];for(let n=1;n<=8;n++){if(!S.ivSet.includes(n)||(harm&&n===1)||(S.ivmode==='sing'&&n===1&&S.ivSet.length>1)){ws.push(0);continue}const s=ST.iv[n];let w=1;if(s&&s.n>=3)w=.6+2.5*(1-s.c/s.n)+Math.min(1.5,(s.t/s.n)/2500);if(this.q&&this.q.n===n&&S.ivSet.length>1)w*=.5;ws.push(w)}if(!ws.some(w=>w>0))return 3;return 1+wpick(ws)},
   draw(cls2=''){const q=this.q,harm=q.harm&&S.ivmode!=='sing';
     const inner=harm?noteSVG(240,q.lowP,TOP,{kind:'w'})+noteSVG(q.n===2?257:240,q.hiP,TOP,{kind:'w'}):noteSVG(205,q.first,TOP,{kind:'w'})+noteSVG(295,q.second,TOP,{kind:'w',cls:cls2});
@@ -454,21 +454,20 @@ const Intervals={
     if(sing){$('#prompt').textContent='Hear the first note, then sing the second.';
       $('#answers').innerHTML=`<div class="row"><button class="btn ghost" type="button" data-a="replay">Replay first note <kbd>R</kbd></button><button class="btn ghost" type="button" data-a="skip">Skip <kbd>↵</kbd></button></div>`;
       $('#answers').querySelectorAll('button').forEach(x=>x.onclick=()=>x.dataset.a==='replay'?this.replay():this.skipQ());
-      fb('<span class="mut">Any octave counts. Headphones help the mic hear only you.</span>');this.replay();
-      Mic.listen(ev=>this.onMic(ev));return}
+      fb('<span class="mut">Listen to the first note. The mic switches on once it has played; sing the second note in any octave.</span>');this.replay();return}
     $('#prompt').textContent='What interval?';
     const hint=S.swhint;
     const items=S.ans==='shape'?[1,2,3,4,5,6,7,8].filter(k=>S.ivSet.includes(k)&&!(harm&&k===1)).map(k=>({v:k,big:ORD2[k-1],sm:hint?shapeLabel(k,down):'',k}))
       :[...Array(13).keys()].filter(x=>SEMN[x].some(k=>S.ivSet.includes(k))).map(x=>({v:x,big:WSHORT[x],sm:hint?exactLabel(x,down):''}));
     $('#answers').innerHTML=ansGrid(items);fb('');this.q.t0=performance.now();
   },
-  replay(){const q=this.q;if(!q)return;const t=ac().currentTime+.03;pluck(hz(midiOf(q.b+q.first)),t,2.2,.22);q.t0=performance.now()+1100;q.heardAt=t},
-  skipQ(){if(!this.q)return;if(this.q.done){skip();return}this.q.done=true;pluck(hz(midiOf(this.q.b+this.q.second)),ac().currentTime+.03,2.2,.2);fb(`<span class="mut">Skipped. That was a ${ORD[this.q.n-1]}: ${nameOf(this.q.b+this.q.first)} → ${nameOf(this.q.b+this.q.second)}.</span>`);later(()=>this.next(),1800)},
+  replay(){const q=this.q;if(!q||q.done)return;q.heardAt=ac().currentTime+.03;q.t0=performance.now()+1400;Mic.listenAfter(midiOf(q.b+q.first),ev=>this.onMic(ev))},
+  skipQ(){if(!this.q)return;if(this.q.done){skip();return}this.q.done=true;Mic.stop();pluck(hz(midiOf(this.q.b+this.q.second)),ac().currentTime+.03,2.2,.2);fb(`<span class="mut">Skipped. That was a ${ORD[this.q.n-1]}: ${nameOf(this.q.b+this.q.first)} → ${nameOf(this.q.b+this.q.second)}.</span>`);later(()=>this.next(),1800)},
   onMic(ev){const q=this.q;if(!q||q.done||locked)return;const target=midiOf(q.b+q.second);
     if(ev.type==='live'){tuner(true,ev.m,ev.m==null?null:target);return}
     const firstM=midiOf(q.b+q.first);
     if(q.n!==1&&q.n!==8&&Math.abs(fold(ev.m,firstM))<=50&&ac().currentTime-(q.heardAt||0)<3)return;
-    const c=Math.round(fold(ev.m,target)),ok=Math.abs(c)<=50,ms=Math.max(0,performance.now()-q.t0);q.done=true;record('iv',ok,ms,q.n);
+    const c=Math.round(fold(ev.m,target)),ok=Math.abs(c)<=50,ms=Math.max(0,performance.now()-q.t0);q.done=true;Mic.stop();record('iv',ok,ms,q.n);
     const sungName=N12[((Math.round(ev.m)%12)+12)%12];this.draw(ok?(Math.abs(c)<=25?'good':'warn'):'bad');
     fb(ok?`<span class="ok">Yes</span> · <b>${ORD[q.n-1]}</b> · you sang ${sungName}${Math.abs(c)>25?` <span class="mut">(${c>0?'a little sharp':'a little flat'})</span>`:''} <span class="mut">· ${nameOf(q.b+q.first)} → ${nameOf(q.b+q.second)}</span>${S.swhint?` · <span class="sw">${shapeLabel(q.n,q.down)}</span>`:''}`
       :`<span class="no">Not quite</span> · you sang <b>${sungName}</b>, the target was <b>${nameOf(q.b+q.second)}</b> · a ${ORD[q.n-1]} ${q.down?'down':'up'} from ${nameOf(q.b+q.first)}<br><span class="mut">Listen to the right note, then try the next one.</span>`);
@@ -498,10 +497,10 @@ const Sing={
   buttons(){const q=this.q,r=q.revealed;let h;
     if(q.listening)h=`<button class="btn" data-a="mic">Stop listening <kbd>M</kbd></button><button class="btn ghost" data-a="sa">Play first note <kbd>S</kbd></button>`;
     else if(q.micDone)h=`<button class="btn" data-a="next">Next phrase <kbd>↵</kbd></button><button class="btn ghost" data-a="mic">Sing it again <kbd>M</kbd></button><button class="btn ghost" data-a="play">Play phrase <kbd>P</kbd></button>`;
-    else if(r)h=`<button class="btn" data-a="yes">I sang it <kbd>Y</kbd></button><button class="btn ghost" data-a="no">Not quite <kbd>N</kbd></button><button class="btn ghost" data-a="play">Play again <kbd>P</kbd></button><button class="btn ghost" data-a="mic">Sing with mic <kbd>M</kbd></button>`;
-    else h=`<button class="btn" data-a="mic">Sing it <kbd>M</kbd></button><button class="btn ghost" data-a="sa">Play first note <kbd>S</kbd></button><button class="btn ghost" data-a="drone">Drone ${drone?'off':'on'} <kbd>D</kbd></button><button class="btn ghost" data-a="reveal">Reveal &amp; play <kbd>↵</kbd></button>`;
+    else if(r)h=`<button class="btn" data-a="yes">I sang it <kbd>Y</kbd></button><button class="btn ghost" data-a="no">Not quite <kbd>N</kbd></button><button class="btn ghost" data-a="play">Play again <kbd>P</kbd></button>`;
+    else h=`<button class="btn ghost" data-a="sa">Play first note <kbd>S</kbd></button><button class="btn ghost" data-a="drone">Drone ${drone?'off':'on'} <kbd>D</kbd></button><button class="btn" data-a="reveal">Reveal &amp; play <kbd>↵</kbd></button>`;
     $('#singrow').innerHTML=h;$('#singrow').querySelectorAll('button').forEach(b=>b.onclick=()=>this.act(b.dataset.a))},
-  next(){Mic.halt();
+  next(){Mic.stop();
     const clef=pickClef(),b=CLEF[clef].bottom,[lo,hi]=range();
     const raga=S.tonic==='any'?pick(RAGAS):RAGAS.find(r=>LET[r.t]===S.tonic);
     const cands=[];for(let p=-1;p<=5;p++)if((((b+p)%7)+7)%7===raga.t)cands.push(p);const tp=pick(cands);
@@ -516,7 +515,7 @@ const Sing={
     let ni=0;ev.forEach(e=>{if(e.t==='n')e.ni=ni++});const degs=ev.filter(e=>e.t==='n').map(e=>e.deg);
     this.q={clef,b,tp,raga,degs,ev,L,revealed:false,st:[],sung:[],idx:0,listening:false,micDone:false};
     $('#prompt').textContent=S.singlab==='swaram'?'Hear Sa, then sing the phrase in swaram.':'Hear the first note, then sing the phrase.';
-    this.draw();fb(`<span class="mut">The phrase starts on <b>${LET[raga.t]}</b>.${L>1?' Count yourself in at a steady beat and hold each note its full length.':''} Press Sing it and the mic checks each note as you go${L>1?' (pitch only, not timing)':''}.</span>`);this.buttons();
+    this.draw();fb(`<span class="mut">The phrase starts on <b>${LET[raga.t]}</b>.${L>1?' Count yourself in at a steady beat and hold each note its full length.':''} Sing it through, then reveal to check.</span>`);this.buttons();
     if(drone)droneOn(midiOf(b+tp));
   },
   label(deg){if(S.singlab!=='swaram')return nameOf(this.q.b+this.q.tp+deg);const sh=SH[S.system],i=((deg%7)+7)%7,s=sh[i];return deg<0?below(s):deg>=7?above(s):s},
@@ -550,25 +549,25 @@ const Sing={
   reveal(){const q=this.q;q.revealed=true;this.draw();if(S.singlab!=='swaram')return `Notes: <b>${q.degs.map(d=>nameOf(q.b+q.tp+d)).join(' ')}</b>`;
     const ex=EX[S.system],sc=[0,1,2,3,4,5,6].map(i=>midiOf(q.b+q.tp+i)-midiOf(q.b+q.tp)).map(x=>ex[x]).join(' ');
     return `Sa = <b>${LET[q.raga.t]}</b> · ${S.system==='carnatic'?q.raga.c:q.raga.h} <span class="mut">(${S.system==='carnatic'?q.raga.h:q.raga.c}) · ${sc}</span>`},
-  startMic(){const q=this.q;this.droneWas=!!drone;droneOff();
-    Mic.start().then(()=>{if(curName!=='sing'||this.q!==q)return;Object.assign(q,{st:[],sung:[],idx:0,listening:true,micDone:false});this.draw();this.buttons();
-      fb('<span class="mut">Sing the first note. Hold each note for a moment; the mic moves on when it hears it.</span>');Mic.listen(ev=>this.onMic(ev))}).catch(()=>{micFail()})},
+  startMic(){const q=this.q;this.droneWas=!!drone;droneOff();Object.assign(q,{st:[],sung:[],idx:0,listening:true,micDone:false,revealed:false});this.draw();this.buttons();
+    fb('<span class="mut">Listen to the first note. Then the mic switches on: sing the phrase, holding each note for a moment.</span>');this.relisten()},
+  relisten(){const q=this.q;Mic.listenAfter(midiOf(q.b+q.tp),ev=>this.onMic(ev))},
   onMic(ev){const q=this.q;if(!q.listening||locked)return;const target=midiOf(q.b+q.tp+q.degs[q.idx]);
     if(ev.type==='live'){tuner(true,ev.m,ev.m==null?null:target);return}
     const c=Math.round(fold(ev.m,target));q.st[q.idx]=Math.abs(c)<=25?'good':Math.abs(c)<=50?'warn':'bad';q.sung[q.idx]=N12[((Math.round(ev.m)%12)+12)%12];q.idx++;
     if(q.idx>=q.degs.length)this.finishMic();else this.draw()},
-  finishMic(){const q=this.q;Mic.halt();q.listening=false;q.micDone=true;const good=q.st.filter(x=>x!=='bad').length,all=q.degs.length;record('sing',good===all,0);
+  finishMic(){const q=this.q;Mic.stop();q.listening=false;q.micDone=true;const good=q.st.filter(x=>x!=='bad').length,all=q.degs.length;record('sing',good===all,0);
     const info=this.reveal();fb(`<span class="${good===all?'ok':'no'}">${good} of ${all} in tune</span> · ${info}<br><span class="mut">Green is in tune, amber a little off, red a different note (shown above it). Listen back now.</span>`);
     this.buttons();this.play();if(this.droneWas)droneOn(midiOf(q.b+q.tp))},
   act(a){if(locked)return;const q=this.q;
-    if(a==='sa')pluck(hz(midiOf(q.b+q.tp)),ac().currentTime+.02,2.4,.22);
+    if(a==='sa'){if(q.listening)this.relisten();else pluck(hz(midiOf(q.b+q.tp)),ac().currentTime+.02,2.4,.22)}
     else if(a==='drone'){drone?droneOff():droneOn(midiOf(q.b+q.tp));this.buttons()}
-    else if(a==='mic'){if(q.listening){Mic.halt();q.listening=false;this.draw();this.buttons();fb('<span class="mut">Stopped listening.</span>')}else this.startMic()}
+    else if(a==='mic'){if(q.listening){Mic.stop();q.listening=false;this.draw();this.buttons();fb('<span class="mut">Stopped listening.</span>')}else this.startMic()}
     else if(a==='reveal'&&!q.revealed&&!q.listening){fb(this.reveal());this.play();this.buttons()}
     else if(a==='play')this.play();
     else if(a==='next'&&q.micDone)this.next();
     else if((a==='yes'||a==='no')&&q.revealed&&!q.micDone){record('sing',a==='yes',0);this.next()}},
-  key(e){const k=e.key.toLowerCase(),q=this.q;const m={s:'sa',d:'drone',p:'play',y:'yes',n:'no',m:'mic',enter:q?.micDone?'next':'reveal',' ':q?.micDone?'next':'reveal'}[k];if(m){e.preventDefault();this.act(m)}}
+  key(e){const k=e.key.toLowerCase(),q=this.q;const m={s:'sa',d:'drone',p:'play',y:'yes',n:'no',enter:q?.micDone?'next':'reveal',' ':q?.micDone?'next':'reveal'}[k];if(m){e.preventDefault();this.act(m)}}
 };
 
 /* ---------- drill: note values ---------- */
@@ -718,8 +717,8 @@ function shapes(){let s='';[2,3,4,5,6,7,8].forEach((n,i)=>{const x=44+i*40;s+=no
 function weakSpots(){let h='';for(let n=1;n<=8;n++){const s=ST.iv[n],acc=s&&s.n?s.c/s.n:null;h+=`<div class="wk${acc!==null&&acc<.75&&s.n>=3?' lo':''}"><span class="s">${ORD2[n-1]}</span><span class="p">${acc===null?'–':Math.round(acc*100)+'%'} · ${s&&s.n?(s.t/s.n/1000).toFixed(1)+'s':'–'}</span><span class="m"><i style="width:${acc===null?0:Math.round(acc*100)}%"></i></span></div>`}return `<div><h3>Your scores</h3><div class="weak">${h}</div><p class="mut" style="margin-top:8px">Accuracy and average time. Weak ones come up more often.</p></div>`}
 function renderTips(){const t={
   notes:`<div><h3>Anchors</h3><p>Treble clef curls round <b>G</b> on line 2. Bass clef’s dots sit either side of <b>F</b> on line 4.</p><p><b>Middle C</b> is one ledger line below the treble staff and one above the bass.</p></div><div><h3>Keys</h3><p>Type the letter. Space or Enter skips the pause after a miss.</p></div>`,
-  intervals:shapes()+`<div><h3>Read the shape</h3><p><b>2nd</b> touches: line to the next space. <b>3rd</b> skips one: line to line, space to space. <b>5th</b> skips two lines. <b>Octave</b> jumps from a line to a space, or a space to a line.</p><p>Same type (line–line, space–space) is <b>odd</b>. Mixed is <b>even</b>.</p></div>${weakSpots()}<div><h3>Singing mode</h3><p>Switch <b>Answer by</b> to Singing. You hear the first note, then sing the second; any octave counts.</p></div><div><h3>Keys</h3><p>Number keys answer: <b>2</b> for a 2nd, <b>3</b> for a 3rd… <b>8</b> for an octave. In singing mode, <b>R</b> replays and <b>Enter</b> skips.</p></div>`,
-  sing:`<div><h3>How to use it</h3><p>Play the first note or turn on the drone. Sing the whole phrase, then reveal it, or press <b>Sing it</b> and let the mic check you.</p><p>Read each step as an interval from the note before: a 2nd, a 3rd, a leap.</p></div><div><h3>Keys</h3><p><b>M</b> sing with mic · <b>S</b> first note · <b>D</b> drone · <b>Enter</b> reveal · <b>Y</b>/<b>N</b> mark · <b>P</b> replay</p></div><div><h3>Singing with the mic</h3><p>Hold each note for a moment. Any octave counts. Green is in tune, amber is a little off, red is a different note.</p><p>Headphones help: the mic then hears only your voice.</p></div>`,
+  intervals:shapes()+`<div><h3>Read the shape</h3><p><b>2nd</b> touches: line to the next space. <b>3rd</b> skips one: line to line, space to space. <b>5th</b> skips two lines. <b>Octave</b> jumps from a line to a space, or a space to a line.</p><p>Same type (line–line, space–space) is <b>odd</b>. Mixed is <b>even</b>.</p></div>${weakSpots()}<div><h3>Keys</h3><p>Number keys answer: <b>2</b> for a 2nd, <b>3</b> for a 3rd… <b>8</b> for an octave.</p></div>`,
+  sing:`<div><h3>How to use it</h3><p>Play the first note or turn on the drone. Sing the whole phrase, then reveal it and mark yourself honestly.</p><p>Read each step as an interval from the note before: a 2nd, a 3rd, a leap.</p></div><div><h3>Keys</h3><p><b>S</b> first note · <b>D</b> drone · <b>Enter</b> reveal · <b>Y</b>/<b>N</b> mark · <b>P</b> replay</p></div>`,
   values:rhythmKey()+`<div><h3>Two rules</h3><p><b>Count the flags.</b> Each flag or beam halves the note.</p><p><b>Heavy hangs, light sits.</b> The semibreve rest hangs below line 4. The minim rest sits on line 3.</p></div>`,
   tap:rhythmKey()+`<div><h3>How to use it</h3><p>Say the counting aloud as you tap. Rests still take their full count.</p><p>Bluetooth headphones add delay. Wired or speakers give fairer timing.</p></div><div><h3>Keys</h3><p><b>Space</b> start or tap · <b>Enter</b> stop (rolling) or next bar · <b>L</b> listen · <b>R</b> retry</p></div>`};
   $('#tips').innerHTML=t[curName]||''}
