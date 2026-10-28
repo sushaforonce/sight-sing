@@ -120,7 +120,9 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 270px;gap:26px;align-items
 .bar{display:flex;justify-content:space-between;align-items:center;gap:10px;font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--muted);min-height:34px;font-variant-numeric:tabular-nums;flex-wrap:wrap}
 .bar b{color:var(--ink);font-weight:700}
 .clock{display:flex;align-items:center;gap:10px}
-#sprint{padding:8px 14px;font-size:10.5px}
+.sprints{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.sprints span{margin-right:3px}
+.sprints .btn{padding:7px 11px;font-size:10.5px}
 .clock .tt{font-size:15px;color:var(--ink)}
 .clock .track{width:90px;height:3px;background:var(--line);border-radius:3px;overflow:hidden}
 .clock .fill{height:100%;background:linear-gradient(90deg,var(--a1),var(--a4))}
@@ -270,7 +272,7 @@ function wpick(ws){let t=ws.reduce((a,b)=>a+b,0),r=Math.random()*t;for(let i=0;i
 
 /* ---------- storage ---------- */
 const store={get(k,f){try{const v=localStorage.getItem(k);return v?JSON.parse(v):f}catch(e){return f}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
-const DEF={singlev:1,singlab:'letters',ivmode:'tap',ivSet:[2,3,4,5,6,7,8],swhint:false,clef:'treble',ledger:true,dir:'mix',view:'melodic',ans:'shape',system:'carnatic',sound:true,tonic:'C',symSet:'both',dotted:false,level:1,tempo:72,count:'num'};
+const DEF={tapmode:'flow',sprint:60,singlev:1,singlab:'letters',ivmode:'tap',ivSet:[2,3,4,5,6,7,8],swhint:false,clef:'treble',ledger:true,dir:'mix',view:'melodic',ans:'shape',system:'carnatic',sound:true,tonic:'C',symSet:'both',dotted:false,level:1,tempo:72,count:'num'};
 let S=Object.assign({},DEF,store.get('ss.settings',{}));
 let ST=Object.assign({days:{},iv:{}},store.get('ss.stats',{}));
 const saveS=()=>store.set('ss.settings',S), saveST=()=>store.set('ss.stats',ST);
@@ -618,43 +620,89 @@ const CELLS={
   3:[[['n',.25],['n',.25],['n',.25],['n',.25]],[['n',.5],['n',.25],['n',.25]],[['n',.25],['n',.25],['n',.5]],[['n',3]]]};
 const DUR={4:'w',3:'h',2:'h',1.5:'q',1:'q',.5:'e',.25:'s'};
 const xb=b=>92+b*104;
+function barInner(bar,X,top){let s='';
+  const groups=[];let g=null;bar.forEach((e,i)=>{const beam=e.t==='n'&&e.d<1;if(beam&&g&&g.beat===Math.floor(e.start)&&g.last===i-1){g.items.push(e);g.last=i}else if(beam){g={beat:Math.floor(e.start),items:[e],last:i};groups.push(g)}else g=null});
+  const beamed=new Set();groups.forEach(gr=>{if(gr.items.length>1)gr.items.forEach(e=>beamed.add(e))});
+  bar.forEach(e=>{const x=X(e.start),cls=e.st||'';
+    if(e.t==='r')s+=restSVG(x,top,DUR[e.d],{dot:e.d===1.5||e.d===3,cls});
+    else{const k=DUR[e.d];s+=noteSVG(x,4,top,{kind:k==='w'?'w':k==='h'?'h':'q',stem:'up',flags:beamed.has(e)?0:(k==='e'?1:k==='s'?2:0),dot:e.d===1.5||e.d===3,cls})}});
+  const sy=yOf(4,top)-34;groups.filter(gr=>gr.items.length>1).forEach(gr=>{const a=X(gr.items[0].start)+6.1,b=X(gr.items[gr.items.length-1].start)+6.1;s+=`<rect x="${a-.7}" y="${sy}" width="${b-a+1.4}" height="4.2" fill="currentColor"/>`;
+    let run=[];const flush=()=>{if(run.length>1){const c=X(run[0].start)+6.1,d=X(run[run.length-1].start)+6.1;s+=`<rect x="${c-.7}" y="${sy+9}" width="${d-c+1.4}" height="4.2" fill="currentColor"/>`}run=[]};
+    gr.items.forEach(e=>{if(e.d===.25)run.push(e);else flush()});flush()});
+  if(S.count!=='off'){const q=S.level>=3,step=q?.25:.5;for(let t=0;t<4;t+=step){const f=t%1;let lab;if(S.count==='num')lab=f===0?String(t+1):f===.5?'&':f===.25?'e':'a';else lab=q?['ta','ka','di','mi'][f/.25]:(f===0?'ta':'ka');s+=`<text class="cnt${f===0?' b':''}" x="${X(t)}" y="${top+4*G+40}" text-anchor="middle">${lab}</text>`}}
+  return s}
+function evalBar(bar,T,beat,rawTaps){const exp=bar.filter(e=>e.t==='n');let gap=beat;for(let i=1;i<exp.length;i++)gap=Math.min(gap,(exp[i].start-exp[i-1].start)*beat);
+  const tol=Math.min(.14,.45*gap);const taps=rawTaps.map(t=>({t,b:(t-T)/beat,used:false})).filter(t=>t.b>-.5&&t.b<4.3);
+  const errs=[];exp.forEach(e=>{const at=T+e.start*beat;let best=null;taps.forEach(t=>{if(!t.used&&Math.abs(t.t-at)<=tol&&(!best||Math.abs(t.t-at)<Math.abs(best.t-at)))best=t});
+    if(best){best.used=true;const d=best.t-at;errs.push(d);e.st=Math.abs(d)<=tol*.5?'good':'warn'}else e.st='bad'});
+  const extras=taps.filter(t=>!t.used),inRest=extras.filter(t=>{const el=bar.find(e=>t.b>=e.start-.1&&t.b<e.start+e.d);return el&&el.t==='r'}).length;
+  const hit=exp.filter(e=>e.st!=='bad').length,clean=hit===exp.length&&!extras.length;
+  const mean=errs.length?errs.reduce((a,b)=>a+b,0)/errs.length*1000:0,abs=errs.length?errs.reduce((a,b)=>a+Math.abs(b),0)/errs.length*1000:0;
+  const lean=Math.abs(mean)<25?'right with the click':mean>0?`about ${Math.round(mean)}ms behind the click`:`about ${Math.round(-mean)}ms ahead of the click`;
+  const line=`<span class="${clean?'ok':'no'}">${hit}/${exp.length} notes</span>${extras.length?` · ${extras.length} extra tap${extras.length>1?'s':''}${inRest?` (${inRest} during a rest)`:''}`:''}${errs.length?` · you’re ${lean}`:''}`;
+  return {taps,clean,abs,line}}
 const Tap={
   st:'idle',
-  opts(){return seg('Level','level',[[1,'Crotchets, minims'],[2,'+ Quavers'],[3,'+ Semiquavers']])+seg('Counting','count',[['num','1 & 2 &'],['solk','ta ka di mi'],['off','Off']])+
+  opts(){return seg('Mode','tapmode',[['flow','Keep rolling'],['bar','One bar at a time']])+seg('Level','level',[[1,'Crotchets, minims'],[2,'+ Quavers'],[3,'+ Semiquavers']])+seg('Counting','count',[['num','1 & 2 &'],['solk','ta ka di mi'],['off','Off']])+
     `<div class="seg"><span class="seg-l">Tempo</span><div class="row" style="align-items:center"><input type="range" id="tempo" min="48" max="120" step="2" value="${S.tempo}"><output id="tempoOut">${S.tempo} bpm</output></div></div>`},
   mount(){
-    $('#answers').innerHTML=`<div style="display:flex;flex-direction:column;gap:8px"><button class="pad" id="pad" type="button"></button><div class="row"><button class="btn ghost" id="listen" type="button">Listen first <kbd>L</kbd></button><button class="btn ghost" id="retry" type="button">Retry <kbd>R</kbd></button><button class="btn ghost" id="nextbar" type="button">Next bar <kbd>↵</kbd></button></div></div>`;
+    const flow=S.tapmode==='flow';
+    $('#answers').innerHTML=`<div style="display:flex;flex-direction:column;gap:8px"><button class="pad" id="pad" type="button"></button><div class="row">${flow?`<button class="btn ghost" id="stopflow" type="button">Stop <kbd>↵</kbd></button>`:`<button class="btn ghost" id="listen" type="button">Listen first <kbd>L</kbd></button><button class="btn ghost" id="retry" type="button">Retry <kbd>R</kbd></button><button class="btn ghost" id="nextbar" type="button">Next bar <kbd>↵</kbd></button>`}</div></div>`;
     $('#pad').addEventListener('pointerdown',e=>{e.preventDefault();this.press(e.timeStamp)});
+    if(flow)$('#stopflow').onclick=()=>this.stopFlow();else{
     $('#listen').onclick=()=>{if(!this.busy())this.start(true)};
     $('#retry').onclick=()=>{if(!this.busy())this.start(false)};
-    $('#nextbar').onclick=()=>{if(!this.busy())this.newBar()};
+    $('#nextbar').onclick=()=>{if(!this.busy())this.newBar()}}
     const t=$('#tempo');t.oninput=()=>{S.tempo=+t.value;$('#tempoOut').textContent=S.tempo+' bpm';saveS();renderMeta()};
     this.newBar();
   },
-  stop(){this.token=null;cancelAnimationFrame(this.rafId);this.st='idle'},
-  busy(){return this.st==='countin'||this.st==='play'||this.st==='listen'},
+  stop(){this.token=null;cancelAnimationFrame(this.rafId);this.st='idle';this.flow=null},
+  busy(){return this.flow?this.st==='countin':this.st==='countin'||this.st==='play'||this.st==='listen'},
   gen(){const L=S.level,pool=[];for(let l=1;l<=L;l++)CELLS[l].forEach(c=>{const len=c.reduce((a,x)=>a+x[1],0);let w=(l===L&&L>1)?2:1;if(len===4)w*=.25;pool.push({c,len,w})});
     let bar,tries=0,sig;do{bar=[];let pos=0;while(pos<4){const ok=pool.filter(o=>o.len<=4-pos&&(o.len===1||(o.len===2&&pos%2===0)||(o.len===3&&pos<=1)||(o.len===4&&pos===0)));const o=ok[wpick(ok.map(x=>x.w))];o.c.forEach(([t,d])=>{bar.push({t,d,start:pos});pos+=d})}
       sig=bar.map(e=>e.t+e.d).join();tries++}while((bar.filter(e=>e.t==='n').length<2||sig===this.sig)&&tries<50);this.sig=sig;return bar},
-  newBar(){this.stop();this.bar=this.gen();this.res=null;this.taps=[];$('#prompt').textContent='Tap each note. Let rests stay silent.';fb('<span class="mut">Four clicks count you in, then the bar starts.</span>');this.draw();this.padLabel()},
-  padLabel(){const p=$('#pad');if(!p)return;p.className='pad'+(this.st==='play'||this.st==='countin'?' live':'');p.innerHTML=this.st==='countin'?'Get ready…':this.st==='play'?'Tap':this.st==='listen'?'Listening…':(this.res?'Again':'Start')+' <kbd>space</kbd>'},
+  newBar(){this.stop();this.bar=this.gen();this.res=null;this.taps=[];$('#prompt').textContent='Tap each note. Let rests stay silent.';fb(S.tapmode==='flow'?'<span class="mut">Four clicks count you in. Then the bars keep coming and the click keeps going until you press Stop. Read ahead: the faded bar is next.</span>':'<span class="mut">Four clicks count you in, then the bar starts.</span>');if(S.tapmode==='flow')this.drawFlow([this.bar,this.next=this.gen()]);else this.draw();this.padLabel()},
+  padLabel(){const p=$('#pad');if(!p)return;p.className='pad'+(this.st==='play'||this.st==='countin'?' live':'');p.innerHTML=this.st==='countin'?'Get ready…':this.flow&&this.st==='play'?'Tap <kbd>space</kbd>':this.st==='play'?'Tap':this.st==='listen'?'Listening…':(this.res?'Again':'Start')+' <kbd>space</kbd>'},
   draw(ph){const top=36,h=top+4*G+50,res=this.res;let s='';
     s+=`<rect x="22" y="${top+G}" width="3.5" height="${2*G}" fill="currentColor"/><rect x="29" y="${top+G}" width="3.5" height="${2*G}" fill="currentColor"/>`;
     s+=`<text class="ts" x="58" y="${top+2*G-1}" font-size="27" text-anchor="middle">4</text><text class="ts" x="58" y="${top+4*G-1}" font-size="27" text-anchor="middle">4</text>`;
     s+=`<line x1="${xb(4)-12}" x2="${xb(4)-12}" y1="${top}" y2="${top+4*G}" stroke="currentColor" stroke-width="1.4"/>`;
-    const groups=[];let g=null;this.bar.forEach((e,i)=>{const beam=e.t==='n'&&e.d<1;if(beam&&g&&g.beat===Math.floor(e.start)&&g.last===i-1){g.items.push(e);g.last=i}else if(beam){g={beat:Math.floor(e.start),items:[e],last:i};groups.push(g)}else g=null});
-    const beamed=new Set();groups.forEach(gr=>{if(gr.items.length>1)gr.items.forEach(e=>beamed.add(e))});
-    this.bar.forEach(e=>{const x=xb(e.start),cls=e.st||'';
-      if(e.t==='r')s+=restSVG(x,top,DUR[e.d],{dot:e.d===1.5||e.d===3,cls});
-      else{const k=DUR[e.d];s+=noteSVG(x,4,top,{kind:k==='w'?'w':k==='h'?'h':'q',stem:'up',flags:beamed.has(e)?0:(k==='e'?1:k==='s'?2:0),dot:e.d===1.5||e.d===3,cls})}});
-    const sy=yOf(4,top)-34;groups.filter(gr=>gr.items.length>1).forEach(gr=>{const a=xb(gr.items[0].start)+6.1,b=xb(gr.items[gr.items.length-1].start)+6.1;s+=`<rect x="${a-.7}" y="${sy}" width="${b-a+1.4}" height="4.2" fill="currentColor"/>`;
-      let run=[];const flush=()=>{if(run.length>1){const c=xb(run[0].start)+6.1,d=xb(run[run.length-1].start)+6.1;s+=`<rect x="${c-.7}" y="${sy+9}" width="${d-c+1.4}" height="4.2" fill="currentColor"/>`}run=[]};
-      gr.items.forEach(e=>{if(e.d===.25)run.push(e);else flush()});flush()});
-    if(S.count!=='off'){const q=S.level>=3,step=q?.25:.5;for(let t=0;t<4;t+=step){const f=t%1;let lab;if(S.count==='num')lab=f===0?String(t+1):f===.5?'&':f===.25?'e':'a';else lab=q?['ta','ka','di','mi'][f/.25]:(f===0?'ta':'ka');s+=`<text class="cnt${f===0?' b':''}" x="${xb(t)}" y="${top+4*G+40}" text-anchor="middle">${lab}</text>`}}
+    s+=barInner(this.bar,xb,top);
     if(res)res.taps.forEach(t=>{const x=xb(t.b);if(x<xb(-.4)||x>xb(4.3))return;s+=`<line class="tk${t.used?'':' x'}" x1="${x}" x2="${x}" y1="${top+4*G+12}" y2="${top+4*G+24}"/>`});
     s+=`<line id="ph" class="ph" x1="0" x2="0" y1="${top-14}" y2="${top+4*G+14}" visibility="hidden"/>`;
     $('#stage').innerHTML=staffSVG(512,h,s,{top,label:'One bar of rhythm in 4/4'})},
-  start(listen){const a=ac(),beat=60/S.tempo,t0=a.currentTime+.15,T=t0+4*beat;
+  drawFlow(bars){if(innerWidth<640)return this.drawFlowStack(bars);const top=36,h=top+4*G+50,X0=b=>96+b*92,X1=b=>496+b*92;let s='';
+    s+=`<rect x="22" y="${top+G}" width="3.5" height="${2*G}" fill="currentColor"/><rect x="29" y="${top+G}" width="3.5" height="${2*G}" fill="currentColor"/>`;
+    s+=`<text class="ts" x="58" y="${top+2*G-1}" font-size="27" text-anchor="middle">4</text><text class="ts" x="58" y="${top+4*G-1}" font-size="27" text-anchor="middle">4</text>`;
+    s+=`<line x1="450" x2="450" y1="${top}" y2="${top+4*G}" stroke="currentColor" stroke-width="1.4"/><line x1="852" x2="852" y1="${top}" y2="${top+4*G}" stroke="currentColor" stroke-width="1.4"/>`;
+    s+=barInner(bars[0],X0,top)+`<g opacity=".45">${barInner(bars[1],X1,top)}</g>`;
+    s+=`<line id="ph" class="ph" x1="0" x2="0" y1="${top-14}" y2="${top+4*G+14}" visibility="hidden"/>`;
+    $('#stage').innerHTML=staffSVG(866,h,s,{top,label:'Two bars of rhythm: this bar and the next'})},
+  drawFlowStack(bars){const top=36,top2=top+4*G+70,h=top2+4*G+50;let s='';
+    const head=t=>`<rect x="22" y="${t+G}" width="3.5" height="${2*G}" fill="currentColor"/><rect x="29" y="${t+G}" width="3.5" height="${2*G}" fill="currentColor"/><text class="ts" x="58" y="${t+2*G-1}" font-size="27" text-anchor="middle">4</text><text class="ts" x="58" y="${t+4*G-1}" font-size="27" text-anchor="middle">4</text><line x1="${xb(4)-12}" x2="${xb(4)-12}" y1="${t}" y2="${t+4*G}" stroke="currentColor" stroke-width="1.4"/>`;
+    let l2='';for(let i=0;i<5;i++){const y=top2+i*G;l2+=`<line class="sl" x1="4" x2="508" y1="${y}" y2="${y}"/>`}
+    s+=head(top)+barInner(bars[0],xb,top)+`<g opacity=".45">${l2}${head(top2)}${barInner(bars[1],xb,top2)}<text class="cnt" x="4" y="${top2-16}">NEXT</text></g>`;
+    s+=`<line id="ph" class="ph" x1="0" x2="0" y1="${top-14}" y2="${top+4*G+14}" visibility="hidden"/>`;
+    $('#stage').innerHTML=staffSVG(512,h,s,{top,label:'This bar, with the next bar below'})},
+  phX(bp,k){return innerWidth<640?xb(bp-4*k):96+(bp-4*k)*92},
+  startFlow(){const a=ac(),beat=60/S.tempo,t0=a.currentTime+.15;for(let i=0;i<4;i++)click(t0+i*beat,i===0);
+    const F=this.flow={beat,t0,T0:t0+4*beat,k:0,bars:[this.bar,this.next||this.gen()],hist:{},evald:-1,sched:-1,taps:[],n:0,c:0};F.hist[0]=F.bars[0];
+    this.st='countin';this.padLabel();this.drawFlow(F.bars);const tok=this.token={};
+    const loop=()=>{if(this.token!==tok)return;if(locked){this.stopFlow(true);return}
+      while(F.T0+(F.sched+1)*4*beat<a.currentTime+.35){F.sched++;for(let i=0;i<4;i++)click(F.T0+(F.sched*4+i)*beat,i===0)}
+      const now=a.currentTime-(a.outputLatency||0),bp=(now-F.T0)/beat;
+      if(bp<0){const c=Math.max(0,Math.floor((now-t0)/beat));$('#prompt').innerHTML=`<span class="ct">${[1,2,3,4].map((n,i)=>i===c?`<b>${n}</b>`:n).join(' ')}</span>`}
+      else{if(this.st==='countin'){this.st='play';this.padLabel();$('#prompt').textContent='Keep going…'}
+        const cb=Math.floor(bp/4);if(cb>F.k){F.k=cb;F.bars.shift();F.bars.push(this.gen());F.hist[cb]=F.bars[0];this.drawFlow(F.bars)}
+        const ph=document.getElementById('ph');if(ph){const x=this.phX(bp,F.k);ph.setAttribute('x1',x);ph.setAttribute('x2',x);ph.setAttribute('visibility','visible')}}
+      while(now>F.T0+((F.evald+1)*4+4.3)*beat&&F.hist[F.evald+1]){F.evald++;const j=F.evald,T=F.T0+j*4*beat;
+        const r=evalBar(F.hist[j],T,beat,F.taps.filter(t=>t>=T-.3*beat&&t<T+3.75*beat));F.n++;if(r.clean)F.c++;record('tap',r.clean,r.abs);
+        fb(`Bar ${j+1}: ${r.line}<br><span class="mut">${F.c} of ${F.n} bars clean so far.</span>`);delete F.hist[j-2]}
+      this.rafId=requestAnimationFrame(loop)};
+    this.rafId=requestAnimationFrame(loop)},
+  stopFlow(silent){const F=this.flow;if(!F)return;this.token=null;cancelAnimationFrame(this.rafId);this.flow=null;this.st='idle';
+    if(!silent){$('#prompt').textContent=F.n?`${F.c} of ${F.n} bars clean.`:'Stopped.';this.bar=F.bars[0];this.next=F.bars[1];this.bar.forEach(e=>delete e.st);this.drawFlow([this.bar,this.next]);this.padLabel()}},
+  start(listen){if(S.tapmode==='flow'&&!listen){this.startFlow();return}const a=ac(),beat=60/S.tempo,t0=a.currentTime+.15,T=t0+4*beat;
     for(let i=0;i<4;i++){click(t0+i*beat,i===0);click(T+i*beat,i===0)}
     if(listen)this.bar.filter(e=>e.t==='n').forEach(e=>wood(T+e.start*beat));
     this.bar.forEach(e=>delete e.st);if(!listen){this.res=null;this.taps=[]}
@@ -665,20 +713,12 @@ const Tap={
       else{if(this.st==='countin'){this.st='play';this.padLabel();$('#prompt').textContent=listen?'Listen…':'Tap!'}const ph=document.getElementById('ph');if(ph){const x=xb((now-T)/beat);ph.setAttribute('x1',x);ph.setAttribute('x2',x);ph.setAttribute('visibility','visible')}}
       if(now>T+4.3*beat){this.finish(listen);return}this.rafId=requestAnimationFrame(loop)};
     this.rafId=requestAnimationFrame(loop)},
-  press(ts){if(locked)return;if(this.st==='countin'||this.st==='play'){this.taps.push(heardNow(ts));const p=$('#pad');p.classList.add('hit');setTimeout(()=>p.classList.remove('hit'),90)}else if(this.st==='idle'||this.st==='done')this.start(false)},
+  press(ts){if(locked)return;if(this.st==='countin'||this.st==='play'){(this.flow?this.flow.taps:this.taps).push(heardNow(ts));const p=$('#pad');p.classList.add('hit');setTimeout(()=>p.classList.remove('hit'),90)}else if(this.st==='idle'||this.st==='done')this.start(false)},
   finish(listen){this.token=null;if(listen){this.st=this.res?'done':'idle';$('#prompt').textContent='Now you. Tap each note.';this.draw();this.padLabel();return}
-    const {T,beat}=this;const exp=this.bar.filter(e=>e.t==='n');let gap=beat;for(let i=1;i<exp.length;i++)gap=Math.min(gap,(exp[i].start-exp[i-1].start)*beat);
-    const tol=Math.min(.14,.45*gap);const taps=this.taps.map(t=>({t,b:(t-T)/beat,used:false})).filter(t=>t.b>-.5&&t.b<4.3);
-    const errs=[];exp.forEach(e=>{const at=T+e.start*beat;let best=null;taps.forEach(t=>{if(!t.used&&Math.abs(t.t-at)<=tol&&(!best||Math.abs(t.t-at)<Math.abs(best.t-at)))best=t});
-      if(best){best.used=true;const d=best.t-at;errs.push(d);e.st=Math.abs(d)<=tol*.5?'good':'warn'}else e.st='bad'});
-    const extras=taps.filter(t=>!t.used),inRest=extras.filter(t=>{const el=this.bar.find(e=>t.b>=e.start-.1&&t.b<e.start+e.d);return el&&el.t==='r'}).length;
-    const hit=exp.filter(e=>e.st!=='bad').length,clean=hit===exp.length&&!extras.length;
-    const mean=errs.length?errs.reduce((a,b)=>a+b,0)/errs.length*1000:0,abs=errs.length?errs.reduce((a,b)=>a+Math.abs(b),0)/errs.length*1000:0;
-    this.res={taps};this.st='done';this.draw();this.padLabel();record('tap',clean,abs);
-    $('#prompt').textContent=clean?'Clean bar.':'Close. Try it again.';
-    const lean=Math.abs(mean)<25?'right with the click':mean>0?`about ${Math.round(mean)}ms behind the click`:`about ${Math.round(-mean)}ms ahead of the click`;
-    fb(`<span class="${clean?'ok':'no'}">${hit}/${exp.length} notes</span>${extras.length?` · ${extras.length} extra tap${extras.length>1?'s':''}${inRest?` (${inRest} during a rest)`:''}`:''}${errs.length?` · you’re ${lean}`:''}<br><span class="mut">Green is on time, amber is a little off, red was missed. Ticks under the staff show your taps.</span>`)},
-  key(e){const k=e.key.toLowerCase();if(k===' '){e.preventDefault();if(!e.repeat)this.press(e.timeStamp)}else if(k==='enter'){e.preventDefault();if(!this.busy())this.newBar()}else if(k==='r'){if(!this.busy())this.start(false)}else if(k==='l'){if(!this.busy())this.start(true)}}
+    const r=evalBar(this.bar,this.T,this.beat,this.taps);this.res={taps:r.taps};this.st='done';this.draw();this.padLabel();record('tap',r.clean,r.abs);
+    $('#prompt').textContent=r.clean?'Clean bar.':'Close. Try it again.';
+    fb(`${r.line}<br><span class="mut">Green is on time, amber is a little off, red was missed. Ticks under the staff show your taps.</span>`)},
+  key(e){const k=e.key.toLowerCase();if(k===' '){e.preventDefault();if(!e.repeat)this.press(e.timeStamp)}else if(k==='enter'){e.preventDefault();if(this.flow)this.stopFlow();else if(!this.busy())this.newBar()}else if(k==='r'){if(!this.busy())this.start(false)}else if(k==='l'){if(!this.busy())this.start(true)}}
 };
 
 /* ---------- tips panel ---------- */
@@ -694,14 +734,14 @@ function renderTips(){const t={
   intervals:shapes()+`<div><h3>Read the shape</h3><p><b>2nd</b> touches: line to the next space. <b>3rd</b> skips one: line to line, space to space. <b>5th</b> skips two lines. <b>Octave</b> jumps from a line to a space, or a space to a line.</p><p>Same type (line–line, space–space) is <b>odd</b>. Mixed is <b>even</b>.</p></div>${weakSpots()}<div><h3>Singing mode</h3><p>Switch <b>Answer by</b> to Singing. You hear the first note, then sing the second; any octave counts.</p></div><div><h3>Keys</h3><p>Number keys answer: <b>2</b> for a 2nd, <b>3</b> for a 3rd… <b>8</b> for an octave. In singing mode, <b>R</b> replays and <b>Enter</b> skips.</p></div>`,
   sing:`<div><h3>How to use it</h3><p>Play the first note or turn on the drone. Sing the whole phrase, then reveal it, or press <b>Sing it</b> and let the mic check you.</p><p>Read each step as an interval from the note before: a 2nd, a 3rd, a leap.</p></div><div><h3>Keys</h3><p><b>M</b> sing with mic · <b>S</b> first note · <b>D</b> drone · <b>Enter</b> reveal · <b>Y</b>/<b>N</b> mark · <b>P</b> replay</p></div><div><h3>Singing with the mic</h3><p>Hold each note for a moment. Any octave counts. Green is in tune, amber is a little off, red is a different note.</p><p>Headphones help: the mic then hears only your voice.</p></div>`,
   values:rhythmKey()+`<div><h3>Two rules</h3><p><b>Count the flags.</b> Each flag or beam halves the note.</p><p><b>Heavy hangs, light sits.</b> The semibreve rest hangs below line 4. The minim rest sits on line 3.</p></div>`,
-  tap:rhythmKey()+`<div><h3>How to use it</h3><p>Say the counting aloud as you tap. Rests still take their full count.</p><p>Bluetooth headphones add delay. Wired or speakers give fairer timing.</p></div><div><h3>Keys</h3><p><b>Space</b> start or tap · <b>L</b> listen · <b>R</b> retry · <b>Enter</b> next bar</p></div>`};
+  tap:rhythmKey()+`<div><h3>How to use it</h3><p>Say the counting aloud as you tap. Rests still take their full count.</p><p>Bluetooth headphones add delay. Wired or speakers give fairer timing.</p></div><div><h3>Keys</h3><p><b>Space</b> start or tap · <b>Enter</b> stop (rolling) or next bar · <b>L</b> listen · <b>R</b> retry</p></div>`};
   $('#tips').innerHTML=t[curName]||''}
 
 /* ---------- rounds, overlay, session ---------- */
 function resetRound(){R={n:0,c:0,ms:0,run:0};renderMeta()}
 function renderClock(){const c=$('#clock');if(RT){const left=Math.max(0,(RT.end-performance.now())/1000),m=Math.floor(Math.ceil(left)/60),s=Math.ceil(left)%60;
     c.innerHTML=`<div class="clock"><span class="track"><span class="fill" style="display:block;width:${100*left/RT.total}%"></span></span><span class="tt">${m}:${String(s).padStart(2,'0')}</span></div>`}
-  else if(!sess)c.innerHTML=`<button class="btn ghost" id="sprint" type="button">60s sprint</button>`,$('#sprint').onclick=()=>startSprint();
+  else if(!sess){c.innerHTML=`<div class="sprints"><span>Sprint</span>${[15,30,60].map(n=>`<button class="btn ghost" type="button" data-sl="${n}">${n}s</button>`).join('')}</div>`;c.querySelectorAll('[data-sl]').forEach(b=>b.onclick=()=>{S.sprint=+b.dataset.sl;saveS();startSprint()})}
   else c.innerHTML=''}
 function startRound(secs,onEnd){resetRound();RT={end:performance.now()+secs*1000,total:secs,onEnd};renderClock()}
 setInterval(()=>{if(!RT)return;renderClock();if(performance.now()>=RT.end&&!(cur.busy&&cur.busy())){const f=RT.onEnd;RT=null;renderClock();f()}},200);
@@ -710,7 +750,7 @@ function overlay(title,lines,primary,onPrimary,secondary,onSecondary){locked=tru
   d.hidden=false;d.querySelector('.primary').onclick=onPrimary;if(secondary)d.querySelector('.ghost').onclick=onSecondary;d.querySelector('.primary').focus({preventScroll:true})}
 function closeOverlay(){$('#done').hidden=true;locked=false}
 function statLine(name){if(name==='sing')return `<b>${R.n}</b> phrases · <b>${R.c}</b> clean`;if(name==='tap')return `<b>${R.c}</b> of <b>${R.n}</b> bars clean`;return `<b>${R.c}</b>/${R.n} correct · <b>${R.n?(R.ms/R.n/1000).toFixed(1):'–'}s</b> average`}
-function startSprint(){closeOverlay();cur.mount();startRound(60,()=>{overlay('Sprint done',[statLine(curName)],'Another sprint',()=>startSprint(),'Keep practising',()=>{closeOverlay();resetRound();cur.mount()})})}
+function startSprint(){closeOverlay();cur.mount();startRound(S.sprint||60,()=>{overlay('Sprint done',[statLine(curName)],'Another sprint',()=>startSprint(),'Keep practising',()=>{closeOverlay();resetRound();cur.mount()})})}
 const PLAN=[['notes',45,'Note names'],['intervals',120,'Intervals'],['sing',60,'Sing'],['values',45,'Note values'],['tap',90,'Tap rhythm']];
 function renderSession(){const d=ST.days[today()];$('#sessBtn').textContent=sess?'End session':(d&&d.done?'Once more':'Begin session');
   document.querySelectorAll('#nav a').forEach(a=>{const i=PLAN.findIndex(p=>p[0]===a.dataset.t);a.classList.toggle('past',!!sess&&i<sess.i);a.classList.toggle('now',!!sess&&i===sess.i)})}
